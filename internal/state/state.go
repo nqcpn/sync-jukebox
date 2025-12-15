@@ -121,15 +121,16 @@ func (m *Manager) Play() {
 		return
 	}
 
+	// 将 IsPlaying 状态设置为 true
 	m.State.IsPlaying = true
+	// 重置 LastUpdate 时间戳，从现在开始计算播放时长
 	m.State.LastUpdate = time.Now()
+	// 重新启动进度更新定时器
 	m.startProgressTicker()
-
-	// 持久化
+	// 持久化当前状态到数据库
 	m.db.SetSystemState("is_playing", "true")
 	m.db.SetSystemState("last_update_unix", strconv.FormatInt(m.State.LastUpdate.Unix(), 10))
-
-	// 广播
+	// 通过 WebSocket 广播状态更新
 	m.hub.Broadcast(m.State)
 	log.Println("Action: Play")
 }
@@ -137,21 +138,25 @@ func (m *Manager) Play() {
 func (m *Manager) Pause() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
+	// 如果当前没有在播放，则直接返回
 	if !m.State.IsPlaying {
 		return
 	}
-
-	m.stopProgressTicker()
-	// 更新最终进度
-	m.State.ProgressMs += time.Since(m.State.LastUpdate).Milliseconds()
+	// 停止进度更新定时器
+	m.stopProgressTicker() // 假设存在一个停止定时器的函数
+	// 核心修复：
+	// 1. 计算从上次更新到现在的增量时间并累加到进度中
+	elapsed := time.Since(m.State.LastUpdate).Milliseconds()
+	m.State.ProgressMs += elapsed
+	// 2. 将 IsPlaying 状态设置为 false
 	m.State.IsPlaying = false
-
-	// 持久化
+	// 3. 更新 LastUpdate 时间戳，为下一次播放做准备
+	m.State.LastUpdate = time.Now()
+	// 持久化当前状态到数据库
 	m.db.SetSystemState("is_playing", "false")
 	m.db.SetSystemState("progress_ms", strconv.FormatInt(m.State.ProgressMs, 10))
-
-	// 广播
+	m.db.SetSystemState("last_update_unix", strconv.FormatInt(m.State.LastUpdate.Unix(), 10))
+	// 通过 WebSocket 广播状态更新
 	m.hub.Broadcast(m.State)
 	log.Println("Action: Pause")
 }
