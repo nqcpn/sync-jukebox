@@ -4,10 +4,10 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
-	"github.com/rs/cors" // 1. 导入新库
+	"github.com/gin-contrib/cors" // 1. 引入 Gin 的 CORS 库
+	"github.com/gin-gonic/gin"    // 2. 引入 Gin
 	"github.com/yeeeck/sync-jukebox/internal/api"
 	"github.com/yeeeck/sync-jukebox/internal/db"
 	"github.com/yeeeck/sync-jukebox/internal/state"
@@ -41,38 +41,48 @@ func main() {
 		log.Fatalf("State manager initialization failed: %v", err)
 	}
 
-	// 初始化 API 和路由
-	apiHandler := api.New(database, stateManager, hub, mediaDir)
-	mux := http.NewServeMux()
-	apiHandler.RegisterRoutes(mux)
-	mux.Handle("/", http.FileServer(http.Dir(frontendDir)))
+	// 3. 初始化 Gin 引擎
+	// gin.SetMode(gin.ReleaseMode) // 如果在生产环境，取消这行注释以关闭调试日志
+	router := gin.Default()
 
-	// 2. 配置 CORS 中间件
-	// 这里我们允许了常见的前端开发服务器源。
-	// 在生产环境中，你应该将其替换为你的前端域名。
-	c := cors.New(cors.Options{
-		AllowedOrigins: []string{
-			"http://10.8.0.10:5173",
-			"http://localhost:5173", // Vite (Vue) 默认
-			"http://localhost:3000", // Create React App 默认
-			"http://localhost:4200", // Angular 默认
-			// "https://your-production-frontend.com", // 生产环境域名
-		},
-		AllowedMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions}, // 允许的方法
-		AllowedHeaders: []string{"Content-Type", "Authorization"},                     // 允许的请求头
-		Debug:          true,                                                          // 在控制台打印调试信息，方便排查问题
+	// 4. 配置 CORS 中间件 (gin-contrib/cors)
+	config := cors.DefaultConfig()
+	config.AllowOrigins = []string{
+		"http://10.8.0.10:5173",
+		"http://localhost:5173",
+		"http://localhost:3000",
+		"http://localhost:4200",
+		// "https://your-production-frontend.com",
+	}
+	config.AllowMethods = []string{"GET", "POST", "OPTIONS"}
+	config.AllowHeaders = []string{"Content-Type", "Authorization"}
+	router.Use(cors.New(config))
+
+	// 5. 注册 API 路由
+	// 注意：这里需要根据之前修改的 api.go，传入 router 而不是 mux
+	apiHandler := api.New(database, stateManager, hub, mediaDir)
+	apiHandler.RegisterRoutes(router)
+
+	// 6. 服务前端静态文件
+	// 注意：SPA (Vue/React) 需要特殊处理，不能简单使用 Static
+	// 任何没有匹配到 API 或 websocket 的路由，都应该返回 index.html
+	router.NoRoute(func(c *gin.Context) {
+		// 尝试直接访问文件 (例如 .js, .css, .ico)
+		path := frontendDir + c.Request.URL.Path
+		if _, err := os.Stat(path); err == nil {
+			c.File(path)
+			return
+		}
+		// 如果文件不存在，或者是目录，则返回 index.html (SPA History Mode 支持)
+		c.File(frontendDir + "/index.html")
 	})
 
-	// 3. 将 CORS 中间件应用到我们的路由
-	handler := c.Handler(mux)
-
 	// 启动服务器
-	log.Printf("SyncJukebox v2.0 server starting on %s with CORS enabled", serverAddr)
+	log.Printf("SyncJukebox v2.0 server starting on %s with Gin & CORS enabled", serverAddr)
 	log.Printf("Serving frontend from: %s", frontendDir)
 	log.Printf("Serving media from: %s", mediaDir)
 
-	// 4. 使用包装后的 handler
-	if err := http.ListenAndServe(serverAddr, handler); err != nil {
+	if err := router.Run(serverAddr); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
