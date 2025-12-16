@@ -227,3 +227,10 @@ func (db *DB) UpdatePlaylist(songIDs []string) error {
 		return nil // 提交事务
 	})
 }
+
+// RemoveSongFromPlaylist removes a song from the playlist by its SongID
+func (db *DB) RemoveSongFromPlaylist(songID string) error {
+	// 假设播放列表表名为 playlist_items，模型为 PlaylistItem
+	// 根据 song_id 字段删除
+	return db.Where("song_id = ?", songID).Delete(&PlaylistItem{}).Error
+}

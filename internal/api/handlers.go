@@ -51,7 +51,11 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 			libraryGroup.POST("/remove", a.handleLibraryRemove)
 		}
 
-		apiGroup.POST("/playlist/add", a.handlePlaylistAdd)
+		playlistGroup := apiGroup.Group("/playlist")
+		{
+			playlistGroup.POST("/add", a.handlePlaylistAdd)
+			playlistGroup.POST("/remove", a.handlePlaylistRemove)
+		}
 
 		playerGroup := apiGroup.Group("/player")
 		{
@@ -202,6 +206,30 @@ func (a *API) handlePlaylistAdd(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add song to playlist"})
 		return
 	}
+	c.Status(http.StatusOK)
+}
+
+// handlePlaylistRemove 处理从播放列表中移除歌曲的请求
+func (a *API) handlePlaylistRemove(c *gin.Context) {
+	var payload struct {
+		SongID string `json:"songId"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if payload.SongID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "songId is required"})
+		return
+	}
+	if err := a.state.RemoveFromPlaylist(payload.SongID); err != nil {
+		// 记录错误日志
+		log.Printf("Failed to remove song from playlist: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove song from playlist"})
+		return
+	}
+	// 成功返回 200 OK
 	c.Status(http.StatusOK)
 }
 
