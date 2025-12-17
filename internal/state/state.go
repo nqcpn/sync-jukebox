@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -190,6 +191,92 @@ func (m *Manager) PrevSong() {
 
 	m.changeSong(nextIdx)
 	log.Println("Action: Previous Song")
+}
+
+// PlaySpecificSong 播放播放列表中指定的歌曲
+func (m *Manager) PlaySpecificSong(songID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	targetIdx := -1
+	for i, item := range m.State.Playlist {
+		if item.SongID == songID {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx == -1 {
+		return errors.New("song not found in playlist")
+	}
+	// 如果点击的就是当前正在放的，且正在播放，是否需要重头开始？
+	// 这里逻辑设定为：直接切歌（也就是重头播放该曲目）
+	m.changeSong(targetIdx)
+	log.Printf("Action: Play specific song, songId: %s", songID)
+	return nil
+}
+
+// ReorderPlaylist 修改歌曲在播放列表中的位置
+func (m *Manager) ReorderPlaylist(songID string, newIndex int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	length := len(m.State.Playlist)
+	if newIndex < 0 || newIndex >= length {
+		return errors.New("newIndex out of bounds")
+	}
+	// 1. 找到该歌曲当前的索引
+	oldIndex := -1
+	for i, item := range m.State.Playlist {
+		if item.SongID == songID {
+			oldIndex = i
+			break
+		}
+	}
+	if oldIndex == -1 {
+		return errors.New("song not found in playlist")
+	}
+	if oldIndex == newIndex {
+		return nil // 位置没变
+	}
+	// 2. 调整 Slice 顺序
+	item := m.State.Playlist[oldIndex]
+	// 先移除
+	tempPlaylist := append(m.State.Playlist[:oldIndex], m.State.Playlist[oldIndex+1:]...)
+	// 再插入
+	// 注意：Golang append 到切片中间稍微繁琐点
+	newPlaylist := make([]db.PlaylistItem, 0, length)
+	newPlaylist = append(newPlaylist, tempPlaylist[:newIndex]...)
+	newPlaylist = append(newPlaylist, item)
+	newPlaylist = append(newPlaylist, tempPlaylist[newIndex:]...)
+	m.State.Playlist = newPlaylist
+	// 3. 关键：修正 CurrentPlaylistIdx
+	// 如果被移动的是当前正在播放的歌曲，它的索引变成了 newIndex
+	if m.State.CurrentSongID == songID {
+		m.State.CurrentPlaylistIdx = newIndex
+	} else {
+		// 如果被移动的不是当前歌曲，我们需要判断当前歌曲相对于移动操作的位置变化
+		// Case A: 歌曲从当前播放歌曲 上方 移到了 下方 -> 当前歌曲索引 -1
+		if oldIndex < m.State.CurrentPlaylistIdx && newIndex >= m.State.CurrentPlaylistIdx {
+			m.State.CurrentPlaylistIdx--
+		}
+		// Case B: 歌曲从当前播放歌曲 下方 移到了 上方 -> 当前歌曲索引 +1
+		if oldIndex > m.State.CurrentPlaylistIdx && newIndex <= m.State.CurrentPlaylistIdx {
+			m.State.CurrentPlaylistIdx++
+		}
+	}
+	// 4. 更新内存中 Order 字段并准备存库
+	var songIDs []string
+	for i := range m.State.Playlist {
+		m.State.Playlist[i].Order = i
+		songIDs = append(songIDs, m.State.Playlist[i].SongID)
+	}
+	// 5. 更新数据库
+	if err := m.db.UpdatePlaylist(songIDs); err != nil {
+		log.Printf("Error updating playlist order in DB: %v", err)
+		// 即使DB失败，内存状态已更新，可以返回错误也可以忽略
+		return err
+	}
+	m.hub.Broadcast(m.State)
+	log.Printf("Action: Reorder song %s from %d to %d", songID, oldIndex, newIndex)
+	return nil
 }
 
 func (m *Manager) AddToPlaylist(songID string) error {

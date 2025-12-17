@@ -25,6 +25,14 @@ type SeekPayload struct {
 	PositionMs int64 `json:"positionMs"`
 }
 
+type PlaySpecificPayload struct {
+	SongID string `json:"songId"`
+}
+type ReorderPlaylistPayload struct {
+	SongID   string `json:"songId"`
+	NewIndex int    `json:"newIndex"`
+}
+
 func New(db *db.DB, state *state.Manager, hub *websocket.Hub, mediaDir string) *API {
 	return &API{db, state, hub, mediaDir}
 }
@@ -32,11 +40,10 @@ func New(db *db.DB, state *state.Manager, hub *websocket.Hub, mediaDir string) *
 // RegisterRoutes 注册 Gin 路由
 func (a *API) RegisterRoutes(router *gin.Engine) {
 	// Web Sockets
-	// 注意：WebSocket 升级通常需要直接操作 http.ResponseWriter 和 *http.Request
+	// WebSocket 通常需要直接操作 http.ResponseWriter 和 *http.Request
 	router.GET("/ws", a.handleWebSocket)
 
 	// Static files
-	// 对应原代码: mux.Handle("/static/audio/", http.StripPrefix("/static/audio/", http.FileServer(http.Dir(a.mediaDir))))
 	router.Static("/static/audio", a.mediaDir)
 
 	// API Group
@@ -55,11 +62,15 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 		{
 			playlistGroup.POST("/add", a.handlePlaylistAdd)
 			playlistGroup.POST("/remove", a.handlePlaylistRemove)
+			// 移动播放列表中的歌曲位置
+			playlistGroup.POST("/move", a.handlePlaylistMove)
 		}
 
 		playerGroup := apiGroup.Group("/player")
 		{
 			playerGroup.POST("/play", a.handlePlay)
+			// 播放列表中指定的歌曲
+			playerGroup.POST("/play-specific", a.handlePlaySpecific)
 			playerGroup.POST("/pause", a.handlePause)
 			playerGroup.POST("/next", a.handleNext)
 			playerGroup.POST("/prev", a.handlePrev)
@@ -268,4 +279,45 @@ func (a *API) handleSeek(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusAccepted)
+}
+
+// handlePlaySpecific 处理播放指定歌曲的请求
+func (a *API) handlePlaySpecific(c *gin.Context) {
+	var payload PlaySpecificPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if payload.SongID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "songId is required"})
+		return
+	}
+	if err := a.state.PlaySpecificSong(payload.SongID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusAccepted)
+}
+
+// handlePlaylistMove 处理移动播放列表项的请求
+func (a *API) handlePlaylistMove(c *gin.Context) {
+	var payload ReorderPlaylistPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if payload.SongID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "songId is required"})
+		return
+	}
+	// index 校验在 state 逻辑中处理，但这里可以做一个基本防守
+	if payload.NewIndex < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "newIndex must be >= 0"})
+		return
+	}
+	if err := a.state.ReorderPlaylist(payload.SongID, payload.NewIndex); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusOK)
 }
