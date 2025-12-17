@@ -3,4 +3,4 @@
 主体为AI生成，前端基于Vue3，后端基于Go。5小时完成开发。
 
 ## DEMO
-![demo](./readme/demo.png)
+![DEMO](https://github.com/user-attachments/assets/24306346-5ef9-4bd8-896a-98dc9da0f3b9)
