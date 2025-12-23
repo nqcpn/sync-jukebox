@@ -3,28 +3,80 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from '@/stores/player';
+// 引入 Hls
+import Hls from 'hls.js';
 
 const audioPlayer = ref(null);
 const store = usePlayerStore();
-// 增加一个状态，标记当前歌曲是否已准备好播放
 let isReadyToPlay = false;
+
+// 定义 Hls 实例变量
+let hls = null;
 
 // 监听要播放的歌曲 URL 变化
 watch(() => store.currentSongUrl, (newUrl, oldUrl) => {
+  // 清理旧的 hls 实例
+  if (hls) {
+    hls.destroy();
+    hls = null;
+  }
+  newUrl = location.origin + newUrl; // 补全为完整 URL
   if (newUrl && newUrl !== oldUrl) {
-    console.log('Audio source changed to:', newUrl);
-    isReadyToPlay = false; // 新歌曲需要重新准备
-    audioPlayer.value.src = newUrl;
-    // 设置src后，浏览器会自动开始加载
+    console.log('Audio source changed to (HLS/Native):', newUrl);
+    isReadyToPlay = false; 
+
+    const audio = audioPlayer.value;
+
+    // 检查是否支持 Hls.js
+    if (Hls.isSupported()) {
+      hls = new Hls();
+      hls.loadSource(newUrl);
+      hls.attachMedia(audio);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('HLS manifest loaded, waiting for buffer...');
+        // 注意：这里不需要手动调 play，因为下面 handleCanPlay 会处理
+        // 或者如果需要自动预加载，可以在这里做逻辑
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.error('HLS Network error, trying to recover...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.error('HLS Media error, trying to recover...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error('HLS Fatal error, destroying...', data);
+              hls.destroy();
+              break;
+          }
+        }
+      });
+
+    } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+      // 针对 Safari 等原生支持 HLS 的浏览器
+      audio.src = newUrl;
+    } else {
+      // 不支持 HLS 的情况，回退到直接设置 src (可能无法播放 m3u8)
+      console.warn('HLS not supported and not native. Trying direct source.');
+      audio.src = newUrl;
+    }
+
   } else if (!newUrl) {
     audioPlayer.value.src = '';
   }
 });
 
-// 当音频可以播放时触发
+// 当音频可以播放时触发 (原生事件，Hls.js 挂载后同样会触发此事件)
 const handleCanPlay = () => {
+  console.log('Audio is ready to play (canplay event)');
   isReadyToPlay = true;
   // 如果此时store的状态是播放，就立即开始播放
   if (store.isPlaying) {
@@ -32,14 +84,11 @@ const handleCanPlay = () => {
   }
 };
 
-// 封装一个带错误处理的播放函数
 const playAudio = () => {
   const playPromise = audioPlayer.value.play();
   if (playPromise !== undefined) {
     playPromise.catch(error => {
-      // 这里是关键！捕获并打印自动播放失败的错误
       console.error("Audio play failed:", error);
-      // 可以在这里给用户一个提示，例如“请点击页面以开始播放”
       store.playbackError = error;
     });
   }
@@ -47,7 +96,6 @@ const playAudio = () => {
 
 // 监听播放状态的变化
 watch(() => store.isPlaying, (isPlaying) => {
-  // 只有在音频准备好之后才响应播放/暂停指令
   if (isReadyToPlay) {
     if (isPlaying) {
       playAudio();
@@ -57,11 +105,12 @@ watch(() => store.isPlaying, (isPlaying) => {
   }
 });
 
-// 监听并校准播放进度 (这个逻辑保持不变)
+// 监听并校准播放进度
 watch(() => store.progressMs, (newProgress) => {
   const player = audioPlayer.value;
   if (!player || !isReadyToPlay) return;
   
+  // HLS 同样使用 currentTime (秒)
   const timeDifference = Math.abs(newProgress - player.currentTime * 1000);
 
   if (timeDifference > 2000 && !player.seeking) {
@@ -70,7 +119,6 @@ watch(() => store.progressMs, (newProgress) => {
   }
 });
 
-// 监听本地音量变化 (这个逻辑保持不变)
 watch(() => store.localVolume, (newVolume) => {
   if (audioPlayer.value) {
     audioPlayer.value.volume = newVolume;
@@ -79,8 +127,14 @@ watch(() => store.localVolume, (newVolume) => {
 
 onMounted(() => {
   if (audioPlayer.value) {
-    // 直接从 store 读取当前的音量值，并设置给 audio 元素
     audioPlayer.value.volume = store.localVolume;
+  }
+});
+
+// 组件卸载时销毁 HLS 实例
+onUnmounted(() => {
+  if (hls) {
+    hls.destroy();
   }
 });
 

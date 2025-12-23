@@ -4,6 +4,7 @@ package main
 
 import (
 	"log"
+	"mime"
 	"os"
 
 	"github.com/gin-contrib/cors" // 1. 引入 Gin 的 CORS 库
@@ -18,13 +19,22 @@ const (
 	dbPath      = "./jukebox.db"
 	mediaDir    = "./media"
 	frontendDir = "./frontend/dist"
-	serverAddr  = ":8080"
+	serverAddr  = ":8880"
 )
 
 func main() {
 	// ... (数据库、Hub、状态管理器的初始化代码保持不变) ...
 	if err := os.MkdirAll(mediaDir, 0755); err != nil {
 		log.Fatalf("Failed to create media directory: %v", err)
+	}
+
+	// --- 注册 HLS MIME 类型 ---
+	// 某些操作系统默认没有注册这些类型，会导致浏览器无法播放
+	if err := mime.AddExtensionType(".m3u8", "application/vnd.apple.mpegurl"); err != nil {
+		log.Printf("Warning: Failed to register .m3u8 mime type: %v", err)
+	}
+	if err := mime.AddExtensionType(".ts", "video/mp2t"); err != nil {
+		log.Printf("Warning: Failed to register .ts mime type: %v", err)
 	}
 
 	database, err := db.New(dbPath)

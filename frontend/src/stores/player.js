@@ -38,10 +38,10 @@ export const usePlayerStore = defineStore('player', {
   getters: {
     // 计算当前歌曲的音频文件URL
     currentSongUrl: (state) => {
+      // 确保 currentSong 存在且有 filePath 属性
+      // console.log('Current Song:', state.currentSong);
       if (state.currentSong && state.currentSong.id) {
-        // 文件名是 {uuid}.ext，但没说扩展名是什么。
-        // 暂时假设所有音频都是 .mp3 格式。
-        return `/static/audio/${state.currentSong.id}.mp3`;
+        return `/static/audio/${state.currentSong.id}/index.m3u8`;
       }
       return null;
     },

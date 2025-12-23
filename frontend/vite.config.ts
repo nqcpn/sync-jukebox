@@ -16,17 +16,17 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8080', // 你的Go后端地址
+        target: 'http://localhost:8880', // 你的Go后端地址
         changeOrigin: true,
         // rewrite: (path) => path.replace(/^\/api/, '') // 如果后端没有/api前缀
       },
       '/ws': {
-        target: 'ws://localhost:8080', // 你的Go后端地址
+        target: 'ws://localhost:8880', // 你的Go后端地址
         changeOrigin: true,
         // rewrite: (path) => path.replace(/^\/ws/, ''), // 如果后端没有/ws前缀
       },
       '/static': {
-        target: 'http://localhost:8080', // 你的Go后端地址
+        target: 'http://localhost:8880', // 你的Go后端地址
         changeOrigin: true,
         // rewrite: (path) => path.replace(/^\/static/, ''), // 如果后端没有/static前缀
       }

@@ -1,9 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -111,59 +113,96 @@ func (a *API) handleGetLibrary(c *gin.Context) {
 }
 
 func (a *API) handleUpload(c *gin.Context) {
-	// Gin 默认限制了请求体大小，如果需要更改，可以在 router 初始化时设置 router.MaxMultipartMemory
-	// c.Request.ParseMultipartForm(100 << 20) // Gin 内部会自动处理 MultipartForm，通常不需要手动 Parse
-
+	// 1. 获取上传的文件
 	fileHeader, err := c.FormFile("audioFile")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Error retrieving the file"})
 		return
 	}
-
 	songUUID, _ := uuid.NewV4()
-	ext := filepath.Ext(fileHeader.Filename)
-	newFileName := songUUID.String() + ext
-	filePath := filepath.Join(a.mediaDir, newFileName)
-
-	// 使用 Gin 的 SaveUploadedFile 简化保存过程
-	if err := c.SaveUploadedFile(fileHeader, filePath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving the file"})
+	songID := songUUID.String()
+	// 2. 保存原始文件到临时路径 (例如 media/temp_<uuid>.mp3)
+	tempFileName := fmt.Sprintf("temp_%s%s", songID, filepath.Ext(fileHeader.Filename))
+	tempFilePath := filepath.Join(a.mediaDir, tempFileName)
+	if err := c.SaveUploadedFile(fileHeader, tempFilePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving temporary file"})
 		return
 	}
-
-	// --- TODO 实现部分 ---
-	// 使用 ffprobe 读取元数据 (假设 getAudioMetadata 函数存在于包中)
-	title, artist, album, durationMs, err := getAudioMetadata(filePath)
+	// 确保函数退出时删除临时文件
+	defer os.Remove(tempFilePath)
+	// 3. 提取元数据 (Duration, Title, Artist)
+	// 在转换前从源文件提取通常更准确
+	title, artist, album, durationMs, err := getAudioMetadata(tempFilePath)
 	if err != nil {
-		log.Printf("Warning: Failed to get metadata for %s: %v. Using filename as title.", fileHeader.Filename, err)
-		// 即使读取失败，也继续，只是元数据不完整
-		title = strings.TrimSuffix(fileHeader.Filename, ext)
-		durationMs = 0 // 或者一个默认值
+		log.Printf("Warning: Metadata extraction failed: %v", err)
+		durationMs = 0 // 转换失败降级处理
 	}
-	// 如果 ffprobe 没有读到标题，则使用文件名作为后备
+	// 如果元数据中没有标题，使用文件名
 	if title == "" {
-		title = strings.TrimSuffix(fileHeader.Filename, ext)
+		title = strings.TrimSuffix(fileHeader.Filename, filepath.Ext(fileHeader.Filename))
 	}
-	// --- END TODO ---
-
+	// 4. 创建该歌曲的 HLS 输出目录 (media/<uuid>/)
+	songDir := filepath.Join(a.mediaDir, songID)
+	if err := os.MkdirAll(songDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create song directory"})
+		return
+	}
+	// 5. 执行 FFmpeg 转换为 HLS
+	// output: media/<uuid>/index.m3u8
+	hlsFileName := "index.m3u8"
+	hlsFilePath := filepath.Join(songDir, hlsFileName)
+	if err := convertToHLS(tempFilePath, hlsFilePath); err != nil {
+		// 失败时清理创建的目录
+		os.RemoveAll(songDir)
+		log.Printf("FFmpeg conversion failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to convert audio to HLS"})
+		return
+	}
+	// 6. 存入数据库
+	// FilePath 存储相对路径: <uuid>/index.m3u8
+	relativeFilePath := filepath.Join(songID, hlsFileName)
+	// 注意：Windows 下 Join 会用反斜杠，web 访问需要正斜杠，这里做个替换以防万一
+	relativeFilePath = filepath.ToSlash(relativeFilePath)
 	song := &db.Song{
-		ID:         songUUID.String(),
+		ID:         songID,
 		Title:      title,
 		Artist:     artist,
 		Album:      album,
 		DurationMs: durationMs,
 		Source:     "local",
-		FilePath:   newFileName,
+		FilePath:   relativeFilePath, // 指向 .m3u8
 	}
-
 	if err := a.db.AddSong(song); err != nil {
-		os.Remove(filePath) // 如果数据库失败，删除文件
+		os.RemoveAll(songDir) // 数据库失败，清理目录
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error adding song to database"})
 		return
 	}
-
-	log.Printf("New song uploaded: %s (Artist: %s, Duration: %dms)", song.Title, song.Artist, song.DurationMs)
+	log.Printf("New song uploaded and converted to HLS: %s (%dms)", song.Title, song.DurationMs)
 	c.JSON(http.StatusCreated, song)
+}
+
+func convertToHLS(inputFile, outputFile string) error {
+	// ffmpeg 命令参数：
+	// -i input.mp3    : 输入
+	// -c:a aac        : 音频编码 AAC (HLS 标准)
+	// -b:a 192k       : 码率
+	// -vn             : 不处理视频流
+	// -hls_time 10    : 每个切片约 10 秒
+	// -hls_list_size 0: 索引文件包含所有切片（不覆盖）
+	// -f hls          : 输出格式
+	cmd := exec.Command("ffmpeg",
+		"-i", inputFile,
+		"-c:a", "aac",
+		"-b:a", "320k",
+		"-vn",
+		"-hls_time", "10",
+		"-hls_list_size", "0",
+		"-f", "hls",
+		outputFile,
+	)
+	// 将 stderr 输出到日志以便调试 ffmpeg 错误
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // handleLibraryRemove 处理删除歌曲的请求
@@ -179,30 +218,24 @@ func (a *API) handleLibraryRemove(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "songId is required"})
 		return
 	}
-
-	// 在状态管理器操作之前获取文件路径，因为之后记录就没了
 	song, err := a.db.GetSong(payload.SongID)
 	if err != nil {
-		// 如果歌曲本就不存在，可以认为删除成功
 		log.Printf("Attempted to delete non-existent song %s", payload.SongID)
 		c.Status(http.StatusOK)
 		return
 	}
-
-	// 调用状态管理器来处理所有逻辑
 	if err := a.state.RemoveSongFromLibrary(payload.SongID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove song: " + err.Error()})
 		return
 	}
-
-	// 从文件系统删除文件
-	filePath := filepath.Join(a.mediaDir, song.FilePath)
-	if err := os.Remove(filePath); err != nil {
-		// 即使文件删除失败，数据库和状态也已更新，所以只记录错误
-		log.Printf("Warning: failed to delete audio file %s: %v", filePath, err)
+	// 关键修改：因为现在每个歌曲是一个目录，不仅是 .m3u8 文件
+	// 数据库存的是 "uuid/index.m3u8"，我们需要删除 "media/uuid"
+	relDir := filepath.Dir(song.FilePath) // 获取 "uuid"
+	absDir := filepath.Join(a.mediaDir, relDir)
+	// 使用 RemoveAll 递归删除目录及其内容 (.m3u8 和 .ts)
+	if err := os.RemoveAll(absDir); err != nil {
+		log.Printf("Warning: failed to delete audio directory %s: %v", absDir, err)
 	}
-
-	// 状态管理器已经广播了状态更新，这里只需返回成功
 	c.Status(http.StatusOK)
 }
 
