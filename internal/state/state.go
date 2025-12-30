@@ -148,8 +148,8 @@ func (m *Manager) Pause() {
 	m.stopProgressTicker() // 假设存在一个停止定时器的函数
 	// 核心修复：
 	// 1. 计算从上次更新到现在的增量时间并累加到进度中
-	elapsed := time.Since(m.State.LastUpdate).Milliseconds()
-	m.State.ProgressMs += elapsed
+	//elapsed := time.Since(m.State.LastUpdate).Milliseconds()
+	//m.State.ProgressMs += elapsed
 	// 2. 将 IsPlaying 状态设置为 false
 	m.State.IsPlaying = false
 	// 3. 更新 LastUpdate 时间戳，为下一次播放做准备
