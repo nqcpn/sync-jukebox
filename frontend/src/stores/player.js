@@ -1,11 +1,11 @@
-import {defineStore} from 'pinia';
-// api 和 websocketService 的导入保持不变
+import { defineStore } from 'pinia';
 import api from '@/api';
-import {websocketService} from '@/services/websocket';
+import { websocketService } from '@/services/websocket';
 
 const VOLUME_STORAGE_KEY = 'jukebox_volume';
 const AUTH_HEADER_STORAGE_KEY = 'jukebox_auth_header';
 
+// --- 辅助函数：从 localStorage 安全地加载音量 ---
 const loadInitialVolume = () => {
     const savedVolume = localStorage.getItem(VOLUME_STORAGE_KEY);
     return savedVolume !== null ? parseFloat(savedVolume) : 0.5;
@@ -156,6 +156,16 @@ export const usePlayerStore = defineStore('player', {
                 await api.addToPlaylist(songId);
             } catch (error) {
                 console.error('Failed to add song to playlist:', error);
+            }
+        },
+        // 将歌曲添加到当前播放歌曲的下一首
+        async addSongNextInPlaylist(songId) {
+            try {
+                // 假设存在一个 API 端点，它接收歌曲 ID
+                // 后端逻辑会找到当前播放歌曲的索引，并将新歌曲插入到 그 索引 + 1 的位置
+                await api.addNextToPlaylist(songId);
+            } catch (error) {
+                console.error('Failed to add song next in playlist:', error);
             }
         },
         async movePlaylistItem(songId, newIndex) {
