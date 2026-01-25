@@ -28,6 +28,8 @@ export const usePlayerStore = defineStore('player', {
         localVolume: loadInitialVolume(),
         previousVolume: null,
         playbackError: null,
+        onlineUsers: [],
+        onlineUsersIntervalId: null, // 用于存储定时器ID
     }),
 
     getters: {
@@ -38,6 +40,7 @@ export const usePlayerStore = defineStore('player', {
             }
             return null;
         },
+        onlineUserCount: (state) => state.onlineUsers.length,
     },
 
     actions: {
@@ -92,8 +95,9 @@ export const usePlayerStore = defineStore('player', {
                 this.authHeader = authHeader;
                 this.isAuthenticated = true;
                 localStorage.setItem(AUTH_HEADER_STORAGE_KEY, authHeader);
-                websocketService.connect(credentials);
+                websocketService.connect(username, password);
                 this.fetchLibrary();
+                this.startFetchingOnlineUsers();
                 return true;
             } catch (error) {
                 this.authError = error.message;
@@ -107,6 +111,7 @@ export const usePlayerStore = defineStore('player', {
             this.authError = null;
             localStorage.removeItem(AUTH_HEADER_STORAGE_KEY);
             websocketService.disconnect();
+            this.stopFetchingOnlineUsers();
         },
         async initializeAuthAndConnect() {
             if (!this.authHeader) {
@@ -116,9 +121,21 @@ export const usePlayerStore = defineStore('player', {
             try {
                 console.log('Initializing session with stored credentials...');
                 const base64Credentials = this.authHeader.split(' ')[1];
-                websocketService.connect(base64Credentials);
+                if (!base64Credentials) {
+                    throw new Error("Invalid auth header in storage");
+                }
+                const decodedCredentials = atob(base64Credentials);
+                const [username, password] = decodedCredentials.split(':', 2); // split into max 2 parts
+                if (!username || password === undefined) {
+                    throw new Error("Could not decode credentials from storage");
+                }
+
+                // Pass the decoded credentials to the websocket service
+                websocketService.connect(username, password);
+                
                 await this.fetchLibrary();
                 this.isAuthenticated = true;
+                this.startFetchingOnlineUsers();
                 console.log('Session restored successfully.');
                 return true;
             } catch (error) {
@@ -126,6 +143,34 @@ export const usePlayerStore = defineStore('player', {
                 this.logout();
                 return false;
             }
+        },
+
+        // --- 新增 Actions ---
+        async fetchOnlineUsers() {
+            try {
+                const response = await api.getOnlineUsers();
+                this.onlineUsers = response.data;
+            } catch (error) {
+                console.error('Failed to fetch online users:', error);
+                this.onlineUsers = []; // 出错时清空列表
+            }
+        },
+        startFetchingOnlineUsers() {
+            // 先立即执行一次
+            this.fetchOnlineUsers();
+            // 如果已有定时器，先清除
+            if (this.onlineUsersIntervalId) {
+                clearInterval(this.onlineUsersIntervalId);
+            }
+            // 设置定时器，每15秒获取一次
+            this.onlineUsersIntervalId = setInterval(this.fetchOnlineUsers, 15000);
+        },
+        stopFetchingOnlineUsers() {
+            if (this.onlineUsersIntervalId) {
+                clearInterval(this.onlineUsersIntervalId);
+                this.onlineUsersIntervalId = null;
+            }
+            this.onlineUsers = []; // 清空用户列表
         },
 
         // ... 其他所有 API 调用 actions 保持不变 ...

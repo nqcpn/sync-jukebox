@@ -74,6 +74,7 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 		protected := apiGroup.Group("")
 		protected.Use(a.BasicAuthMiddleware())
 		{
+			protected.GET("/online-users", a.handleGetOnlineUsers)
 			libraryGroup := apiGroup.Group("/library")
 			{
 				libraryGroup.GET("", a.handleGetLibrary)
@@ -81,17 +82,17 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 				libraryGroup.POST("/remove", a.handleLibraryRemove)
 			}
 
-		playlistGroup := apiGroup.Group("/playlist")
-		{
-			playlistGroup.POST("/add", a.handlePlaylistAdd)
-			// 下一首播放
-			playlistGroup.POST("/add-next", a.handlePlaylistAddNext)
-			playlistGroup.POST("/remove", a.handlePlaylistRemove)
-			// 移动播放列表中的歌曲位置
-			playlistGroup.POST("/move", a.handlePlaylistMove)
-			// 打乱播放列表
-			playlistGroup.POST("/shuffle", a.handlePlaylistShuffle)
-		}
+			playlistGroup := apiGroup.Group("/playlist")
+			{
+				playlistGroup.POST("/add", a.handlePlaylistAdd)
+				// 下一首播放
+				playlistGroup.POST("/add-next", a.handlePlaylistAddNext)
+				playlistGroup.POST("/remove", a.handlePlaylistRemove)
+				// 移动播放列表中的歌曲位置
+				playlistGroup.POST("/move", a.handlePlaylistMove)
+				// 打乱播放列表
+				playlistGroup.POST("/shuffle", a.handlePlaylistShuffle)
+			}
 
 			playerGroup := apiGroup.Group("/player")
 			{
@@ -107,10 +108,35 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 	}
 }
 
+// handleWebSocket 现在负责在升级连接前进行认证
 func (a *API) handleWebSocket(c *gin.Context) {
-	// Gin 的 Context 提供了 Writer 和 Request，可以直接传递给 WebSocket 升级器
-	// 传递一个函数，当新用户连接时，会调用此函数获取当前状态并发送
-	a.hub.ServeWs(c.Writer, c.Request, a.state.GetFullState)
+	// --- START: MODIFIED CODE ---
+	// 1. 从 URL 查询参数中提取凭证
+	user := c.Query("username")
+	pass := c.Query("password")
+	if user == "" || pass == "" {
+		// 如果没有凭证，则拒绝升级
+		http.Error(c.Writer, "Username or password not provided in query parameters", http.StatusUnauthorized)
+		return
+	}
+	// --- END: MODIFIED CODE ---
+	// 2. 验证凭证 (这部分逻辑保持不变)
+	dbUser, err := a.db.GetUserByUsername(user)
+	if err != nil || !dbUser.CheckPassword(pass) {
+		http.Error(c.Writer, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	// 3. 凭证有效，调用 ServeWs 并传入认证后的用户对象 (这部分逻辑保持不变)
+	onConnect := func() interface{} {
+		return a.state.GetFullState()
+	}
+	a.hub.ServeWs(c.Writer, c.Request, dbUser, onConnect)
+}
+
+// handleGetOnlineUsers 获取当前在线的用户列表
+func (a *API) handleGetOnlineUsers(c *gin.Context) {
+	onlineUsers := a.hub.GetOnlineUsers()
+	c.JSON(http.StatusOK, onlineUsers)
 }
 
 //func (a *API) handleValidateToken(c *gin.Context) {

@@ -80,4 +80,8 @@ export default {
     seek(positionMs) {
         return apiClient.post('/player/seek', {positionMs});
     },
+    // 获取在线用户列表
+    getOnlineUsers() {
+        return apiClient.get('/online-users');
+    },
 };

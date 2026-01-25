@@ -1,7 +1,6 @@
 <template>
   <div class="jukebox-layout">
     <header>
-      <!-- 1. 将图标和标题分组 -->
       <div class="header-brand">
         <img src="@/assets/icon.png" alt="SyncJukebox Icon" class="icon" />
         <div class="title">
@@ -9,8 +8,11 @@
         </div>
       </div>
 
-      <!-- 2. 添加退出登录按钮 -->
-      <button @click="handleLogout" class="logout-button">Logout</button>
+      <!-- 修改: 将右侧控件分组 -->
+      <div class="header-controls">
+        <OnlineUsers /> <!-- 新增: 在线用户组件 -->
+        <button @click="handleLogout" class="logout-button">Logout</button>
+      </div>
     </header>
     <main>
       <div class="left-panel">
@@ -24,32 +26,29 @@
       <PlayerControls />
     </footer>
 
-    <!-- 播放权限弹窗 -->
     <PlaybackPermissionModal :visible="showPermissionModal" @confirm="handlePermissionConfirm" />
   </div>
 </template>
 
 <script setup>
 import { ref, watch } from 'vue';
-import { useRouter } from 'vue-router'; // <-- 导入 useRouter
+import { useRouter } from 'vue-router';
 import MediaLibrary from '../components/MediaLibrary.vue';
 import Playlist from '../components/Playlist.vue';
 import PlayerControls from '../components/PlayerControls.vue';
 import PlaybackPermissionModal from '../components/PlaybackPermissionModal.vue';
+import OnlineUsers from '../components/OnlineUsers.vue'; // <-- 新增: 导入组件
 import { usePlayerStore } from '@/stores/player';
 
 const store = usePlayerStore();
-const router = useRouter(); // <-- 获取 router 实例
+const router = useRouter();
 const showPermissionModal = ref(false);
 
-// 3. 创建 handleLogout 方法
 const handleLogout = () => {
   store.logout();
-  // 虽然路由守卫会自动处理重定向，但显式跳转是更好的用户体验
   router.push({ name: 'login' });
 };
 
-// 处理弹窗点击确认
 const handlePermissionConfirm = async () => {
   try {
     await store.play();
@@ -59,7 +58,6 @@ const handlePermissionConfirm = async () => {
   }
 };
 
-// 监听 Store 中的错误状态
 watch(() => store.playbackError, (newError) => {
   if (newError && newError.name === 'NotAllowedError') {
     showPermissionModal.value = true;
@@ -83,19 +81,24 @@ watch(() => store.playbackError, (newError) => {
 header {
   display: flex;
   align-items: center;
-  /* 4. 修改布局以将内容推向两边 */
   justify-content: space-between;
-  padding: 1rem 1.5rem; /* 左右也增加一些内边距 */
+  padding: 1rem 1.5rem;
   background-color: #181818;
   font-size: 1.2rem;
   font-weight: bold;
   flex-shrink: 0;
 }
 
-/* 5. 为新添加的元素添加样式 */
 .header-brand {
   display: flex;
   align-items: center;
+}
+
+/* 新增: 右侧控件容器样式 */
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem; /* 为控件之间添加间距 */
 }
 
 .logout-button {
@@ -114,7 +117,6 @@ header {
   background-color: #fff;
   color: #121212;
 }
-
 
 main {
   display: flex;
