@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"gorm.io/gorm"
 	"log"
@@ -18,10 +19,11 @@ import (
 )
 
 type API struct {
-	db       *db.DB
-	state    *state.Manager
-	hub      *websocket.Hub
-	mediaDir string
+	db         *db.DB
+	state      *state.Manager
+	hub        *websocket.Hub
+	mediaDir   string
+	keyManager *InvitationKeyManager
 }
 
 type SeekPayload struct {
@@ -41,8 +43,14 @@ type AuthPayload struct {
 	Password string `json:"password" binding:"required"`
 }
 
-func New(db *db.DB, state *state.Manager, hub *websocket.Hub, mediaDir string) *API {
-	return &API{db, state, hub, mediaDir}
+type RegisterPayload struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	Key      string `json:"key"      binding:"required"` // 前端发送的邀请密钥
+}
+
+func New(db *db.DB, state *state.Manager, hub *websocket.Hub, mediaDir string, keyManager *InvitationKeyManager) *API {
+	return &API{db, state, hub, mediaDir, keyManager}
 }
 
 // RegisterRoutes 注册 Gin 路由
@@ -66,6 +74,7 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 		protected := apiGroup.Group("")
 		protected.Use(a.BasicAuthMiddleware())
 		{
+			protected.GET("/online-users", a.handleGetOnlineUsers)
 			libraryGroup := apiGroup.Group("/library")
 			{
 				libraryGroup.GET("", a.handleGetLibrary)
@@ -76,6 +85,8 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 			playlistGroup := apiGroup.Group("/playlist")
 			{
 				playlistGroup.POST("/add", a.handlePlaylistAdd)
+				// 下一首播放
+				playlistGroup.POST("/add-next", a.handlePlaylistAddNext)
 				playlistGroup.POST("/remove", a.handlePlaylistRemove)
 				// 移动播放列表中的歌曲位置
 				playlistGroup.POST("/move", a.handlePlaylistMove)
@@ -94,14 +105,38 @@ func (a *API) RegisterRoutes(router *gin.Engine) {
 				playerGroup.POST("/seek", a.handleSeek)
 			}
 		}
-
 	}
 }
 
+// handleWebSocket 现在负责在升级连接前进行认证
 func (a *API) handleWebSocket(c *gin.Context) {
-	// Gin 的 Context 提供了 Writer 和 Request，可以直接传递给 WebSocket 升级器
-	// 传递一个函数，当新用户连接时，会调用此函数获取当前状态并发送
-	a.hub.ServeWs(c.Writer, c.Request, a.state.GetFullState)
+	// --- START: MODIFIED CODE ---
+	// 1. 从 URL 查询参数中提取凭证
+	user := c.Query("username")
+	pass := c.Query("password")
+	if user == "" || pass == "" {
+		// 如果没有凭证，则拒绝升级
+		http.Error(c.Writer, "Username or password not provided in query parameters", http.StatusUnauthorized)
+		return
+	}
+	// --- END: MODIFIED CODE ---
+	// 2. 验证凭证 (这部分逻辑保持不变)
+	dbUser, err := a.db.GetUserByUsername(user)
+	if err != nil || !dbUser.CheckPassword(pass) {
+		http.Error(c.Writer, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	// 3. 凭证有效，调用 ServeWs 并传入认证后的用户对象 (这部分逻辑保持不变)
+	onConnect := func() interface{} {
+		return a.state.GetFullState()
+	}
+	a.hub.ServeWs(c.Writer, c.Request, dbUser, onConnect)
+}
+
+// handleGetOnlineUsers 获取当前在线的用户列表
+func (a *API) handleGetOnlineUsers(c *gin.Context) {
+	onlineUsers := a.hub.GetOnlineUsers()
+	c.JSON(http.StatusOK, onlineUsers)
 }
 
 //func (a *API) handleValidateToken(c *gin.Context) {
@@ -145,28 +180,34 @@ func (a *API) BasicAuthMiddleware() gin.HandlerFunc {
 
 // handleRegister 处理用户注册
 func (a *API) handleRegister(c *gin.Context) {
-	var payload AuthPayload
+	var payload RegisterPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Username and password are required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Username, password, and key are required"})
 		return
 	}
-	// 检查用户名是否已存在
+	// 1. 验证邀请密钥
+	if !a.keyManager.ValidateAndConsumeKey(payload.Key) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired invitation key"})
+		return
+	}
+	// 2. 密钥验证通过，继续执行原始的注册逻辑
 	_, err := a.db.GetUserByUsername(payload.Username)
 	if err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Username already exists"})
 		return
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
 	}
-	// 创建用户
+
 	_, err = a.db.CreateUser(payload.Username, payload.Password)
 	if err != nil {
 		log.Printf("Failed to create user: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
+
 	c.JSON(http.StatusCreated, gin.H{"message": "User registered successfully"})
 }
 
@@ -446,6 +487,23 @@ func (a *API) handlePlaylistShuffle(c *gin.Context) {
 	// 该接口不需要请求体参数
 	if err := a.state.ShufflePlaylist(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to shuffle playlist"})
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+// handlePlaylistAddNext 处理将歌曲添加到下一首播放的请求
+func (a *API) handlePlaylistAddNext(c *gin.Context) {
+	var payload struct {
+		SongID string `json:"songId"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if err := a.state.AddNextInPlaylist(payload.SongID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add song next in playlist: " + err.Error()})
 		return
 	}
 	c.Status(http.StatusOK)
