@@ -1,5 +1,7 @@
 <template>
   <div class="controls-wrapper">
+    <!-- 快捷键提示模态框 -->
+    <KeyboardShortcutsModal :visible="showShortcutsModal" @close="showShortcutsModal = false" />
     <!-- 歌曲信息 -->
     <div class="song-info">
       <div class="info-text">
@@ -85,9 +87,56 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'; // 引入 computed
+// --- MODIFIED: 引入 onMounted, onUnmounted ---
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from '@/stores/player.js';
+// --- NEW: 引入快捷键提示组件 ---
+import KeyboardShortcutsModal from './KeyboardShortcutsModal.vue';
 const store = usePlayerStore();
+// --- NEW: 控制快捷键提示模态框的显示状态 ---
+const showShortcutsModal = ref(false);
+// --- NEW: 全局键盘事件处理器 ---
+const handleKeyDown = (event) => {
+  // 如果焦点在输入框内，则不触发快捷键
+  if (['INPUT', 'TEXTAREA'].includes(event.target.tagName)) {
+    return;
+  }
+  // Shift + ? 显示帮助
+  if (event.shiftKey && event.key === '?') {
+    event.preventDefault(); // 防止浏览器默认行为
+    showShortcutsModal.value = !showShortcutsModal.value;
+    return;
+  }
+  // 如果模态框是打开的，则不触发其他快捷键
+  if (showShortcutsModal.value) {
+    return;
+  }
+  // 根据按键触发不同操作
+  switch (event.key.toLowerCase()) {
+    case 'p':
+      togglePlayPause();
+      break;
+    case 'j':
+      store.next();
+      break;
+    case 'k':
+      store.prev();
+      break;
+    case 'm':
+      toggleMute();
+      break;
+    case 'c':
+      togglePlayMode();
+      break;
+  }
+};
+// --- NEW: 在组件挂载时添加监听器，卸载时移除 ---
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown);
+});
 
 // --- 样式辅助函数: 动态计算背景渐变 ---
 const getSliderStyle = (current, max) => {
