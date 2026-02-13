@@ -1,12 +1,22 @@
 <template>
   <div class="media-library-container">
     <h2>Media Library</h2>
+
+    <!-- 新增: 搜索栏 -->
+    <div class="search-bar">
+      <input
+          type="text"
+          v-model="searchQuery"
+          placeholder="Search by title or artist..."
+      />
+    </div>
+
     <!-- 文件上传 -->
     <MediaUpload />
 
-    <!-- 歌曲列表 -->
+    <!-- 歌曲列表 (现在使用 filteredLibrary) -->
     <ul class="song-list">
-      <li v-for="song in store.mediaLibrary" :key="song.id" class="song-item">
+      <li v-for="song in filteredLibrary" :key="song.id" class="song-item">
         <div class="song-details">
           <span class="song-title">{{ song.title }}</span>
           <span class="song-artist">{{ song.artist || 'Unknown Artist' }}</span>
@@ -45,9 +55,25 @@ const store = usePlayerStore();
 const pollingInterval = ref(null);
 const isLoading = ref(false);
 
+const searchQuery = ref('');
+
 const playlistSongIds = computed(() => {
   return new Set(store.playlist.map(item => item.song_id));
 });
+
+const filteredLibrary = computed(() => {
+  const searchTerm = searchQuery.value.trim().toLowerCase();
+  if (!searchTerm) {
+    return store.mediaLibrary;
+  }
+
+  return store.mediaLibrary.filter(song => {
+    const titleMatch = song.title.toLowerCase().includes(searchTerm);
+    const artistMatch = song.artist && song.artist.toLowerCase().includes(searchTerm);
+    return titleMatch || artistMatch;
+  });
+});
+
 
 const refreshLibrary = async () => {
   if (isLoading.value) return;
@@ -92,6 +118,27 @@ h2,
 .upload-section {
   flex-shrink: 0;
 }
+
+/* --- MODIFIED: 调整了搜索栏的边距 --- */
+.search-bar {
+  /* 修改前: margin-bottom: 1rem; */
+  margin: 1rem 0 0.5rem; /* 增加了上边距，减小了下边距 */
+  padding: 0 0.25rem;
+}
+
+.search-bar input {
+  width: 100%;
+  padding: 0.5rem;
+  background-color: #282828;
+  border: 1px solid #535353;
+  color: #fff;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.search-bar input::placeholder {
+  color: #888;
+}
+/* ------------------------------------ */
 
 .song-list {
   flex: 1;
