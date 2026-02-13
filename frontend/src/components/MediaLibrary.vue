@@ -2,17 +2,11 @@
   <div class="media-library-container">
     <h2>Media Library</h2>
 
-    <!-- 新增: 搜索栏 -->
-    <div class="search-bar">
-      <input
-          type="text"
-          v-model="searchQuery"
-          placeholder="Search by title or artist..."
-      />
-    </div>
-
     <!-- 文件上传 -->
     <MediaUpload />
+
+    <!-- SearchBar 组件 -->
+    <SearchBar v-model="searchQuery" />
 
     <!-- 歌曲列表 (现在使用 filteredLibrary) -->
     <ul class="song-list">
@@ -51,16 +45,19 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { usePlayerStore } from '@/stores/player';
 import MediaUpload from '@/components/MediaUpload.vue';
+import SearchBar from '@/components/SearchBar.vue'; // --- 新增: 导入 SearchBar 组件 ---
+
 const store = usePlayerStore();
 const pollingInterval = ref(null);
 const isLoading = ref(false);
 
-const searchQuery = ref('');
+const searchQuery = ref(''); // 搜索状态保留在父组件中
 
 const playlistSongIds = computed(() => {
   return new Set(store.playlist.map(item => item.song_id));
 });
 
+// 过滤逻辑保持不变，它依赖于本组件的 searchQuery
 const filteredLibrary = computed(() => {
   const searchTerm = searchQuery.value.trim().toLowerCase();
   if (!searchTerm) {
@@ -118,27 +115,6 @@ h2,
 .upload-section {
   flex-shrink: 0;
 }
-
-/* --- MODIFIED: 调整了搜索栏的边距 --- */
-.search-bar {
-  /* 修改前: margin-bottom: 1rem; */
-  margin: 1rem 0 0.5rem; /* 增加了上边距，减小了下边距 */
-  padding: 0 0.25rem;
-}
-
-.search-bar input {
-  width: 100%;
-  padding: 0.5rem;
-  background-color: #282828;
-  border: 1px solid #535353;
-  color: #fff;
-  border-radius: 4px;
-  box-sizing: border-box;
-}
-.search-bar input::placeholder {
-  color: #888;
-}
-/* ------------------------------------ */
 
 .song-list {
   flex: 1;
