@@ -3,7 +3,7 @@
     <input
         type="text"
         v-model="model"
-        placeholder="Search by title or artist..."
+        placeholder="Search by title or artist (a: or @)"
     />
   </div>
 </template>

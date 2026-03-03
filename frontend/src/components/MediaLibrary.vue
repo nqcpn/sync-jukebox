@@ -6,6 +6,7 @@
     <MediaUpload />
 
     <!-- SearchBar 组件 -->
+    <!-- 可以在此处通过 props 传递 placeholder 提示用户支持高级搜索，如果 SearchBar 支持的话 -->
     <SearchBar v-model="searchQuery" />
 
     <!-- 歌曲列表 (现在使用 filteredLibrary) -->
@@ -57,17 +58,33 @@ const playlistSongIds = computed(() => {
   return new Set(store.playlist.map(item => item.song_id));
 });
 
-// 过滤逻辑保持不变，它依赖于本组件的 searchQuery
+// 修改后的过滤逻辑：默认搜歌名，支持 tag 搜歌手
 const filteredLibrary = computed(() => {
-  const searchTerm = searchQuery.value.trim().toLowerCase();
-  if (!searchTerm) {
+  const rawInput = searchQuery.value.trim().toLowerCase();
+
+  // 如果没有输入，显示全部
+  if (!rawInput) {
     return store.mediaLibrary;
   }
 
+  // 定义歌手搜索的前缀 (支持 "artist:" 或 "@")
+  const artistPrefixes = ['a:', '@'];
+  const matchedPrefix = artistPrefixes.find(prefix => rawInput.startsWith(prefix));
+
+  // 如果检测到歌手 tag
+  if (matchedPrefix) {
+    const term = rawInput.slice(matchedPrefix.length).trim();
+    // 如果只有前缀没有内容，依然返回全部，或者可以返回空，这里选择返回全部体验较好
+    if (!term) return store.mediaLibrary;
+
+    return store.mediaLibrary.filter(song =>
+        song.artist && song.artist.toLowerCase().includes(term)
+    );
+  }
+
+  // 默认逻辑：仅搜索歌名 (Title)
   return store.mediaLibrary.filter(song => {
-    const titleMatch = song.title.toLowerCase().includes(searchTerm);
-    const artistMatch = song.artist && song.artist.toLowerCase().includes(searchTerm);
-    return titleMatch || artistMatch;
+    return song.title.toLowerCase().includes(rawInput);
   });
 });
 
